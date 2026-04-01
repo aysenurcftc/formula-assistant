@@ -1,127 +1,123 @@
+
+import sys
+import uuid
+import signal
+import argparse
+import time
+import subprocess
+import psycopg2
 from pathlib import Path
-from dotenv import load_dotenv
-from langchain.tools import tool
-from langchain_anthropic import ChatAnthropic
-from langgraph.prebuilt import create_react_agent 
-from src.tools.pdf_tools import convert_pdf_to_md      
-from src.tools.formula_tools import parse_formula_chunks
-
-load_dotenv()
-
-model = ChatAnthropic(
-    model="claude-haiku-4-5-20251001",
-)
 
 
-@tool
-def convert_pdf(pdf_path: str) -> str:
-    """Converts a PDF file to markdown. Should always be called first."""
-    return convert_pdf_to_md(pdf_path)
+from langchain_core.messages import HumanMessage
+from src.config import DB_URI
+from src.agents.supervisor import build_graph, get_graph
 
-
-@tool
-def extract_and_explain_formulas(md_path: str) -> str:
-    """Extracts and explains formulas found in the markdown file."""
-    chunks = parse_formula_chunks(md_path)
-    if not chunks:
-        return "No formulas found in this file."
-    results = []
-    for chunk in chunks:
-        formula_list = "\n".join(f"  - {f}" for f in chunk["formulas"])
-        results.append(f"### {chunk['section']}\nFormulas:\n{formula_list}\nContent:\n{chunk['content']}")
-    return "\n\n".join(results)
-
-
-@tool
-def read_markdown(md_path: str) -> str:
-    """Reads the content of a markdown file. Used for summarization."""
-    with open(md_path, encoding="utf-8") as f:
-        return f.read()[:4000]
-
-
-formula_agent = create_react_agent(
-    model,
-    tools=[extract_and_explain_formulas],
-    prompt=(
-        "You are a math formula expert. "
-        "Extract formulas from the markdown file and explain each one clearly: "
-        "what it represents, what each symbol means, and its mathematical significance. "
-        "Be concise but complete."
+def ensure_postgres(db_uri: str = DB_URI) -> None:
+    """Checks if Postgres is running in Docker, starts it if not."""
+    result = subprocess.run(
+        ["docker", "inspect", "-f", "{{.State.Running}}", "langgraph-postgres"],
+        capture_output=True, text=True
     )
-)
+    if result.stdout.strip() != "true":
+        print("  [DB] Starting PostgreSQL...")
+        subprocess.run(["docker", "compose", "up", "-d"], check=True)
 
-summary_agent = create_react_agent(
-    model,
-    tools=[read_markdown],
-    prompt=(
-        "You are a scientific paper summarizer. "
-        "Read the markdown file and summarize the paper in max 300 words: "
-        "main objective, methods, key findings, conclusions. "
-        "Plain English."
+    _wait_for_postgres(db_uri)
+
+def _wait_for_postgres(db_uri: str, retries: int = 15, delay: float = 1.5) -> None:
+    """Waits for Postgres to become ready for connections."""
+    for attempt in range(1, retries + 1):
+        try:
+            conn = psycopg2.connect(db_uri)
+            conn.close()
+            print("  [DB] PostgreSQL is ready.\n")
+            return
+        except psycopg2.OperationalError:
+            print(f"  [DB] Waiting... ({attempt}/{retries})")
+            time.sleep(delay)
+    raise RuntimeError(
+        "Could not start PostgreSQL. "
+        "Check logs with `docker compose logs postgres`."
     )
-)
 
+def run_chat(pdf_path: str, db_uri: str) -> None:
+    ensure_postgres(db_uri)
+    thread_id = str(uuid.uuid4())
+    config = {"configurable": {"thread_id": thread_id}}
 
-@tool
-def explain_formulas(request: str) -> str:
-    """Explains the mathematical formulas in the paper.
-    Use when the user wants to understand formulas, learn about symbols,
-    or get explanations for mathematical expressions.
-    Input: markdown file path and what the user wants
-    """
-    result = formula_agent.invoke({
-        "messages": [{"role": "user", "content": request}]
-    })
-    return result["messages"][-1].content
+    print("\n" + "=" * 60)
+    print("  Research Paper Assistant")
+    print("=" * 60)
+    print(f"  PDF      : {pdf_path}")
+    print(f"  Thread ID: {thread_id}")
+    print("  Type 'exit' to quit or press Ctrl+C.")
+    print("=" * 60 + "\n")
 
+    with get_graph(db_uri) as checkpointer:
+        try:
+            checkpointer.setup()
+        except Exception:
+            pass  # Skip if tables already exist
 
-@tool
-def summarize_paper(request: str) -> str:
-    """Summarizes the paper.
-    Use when the user wants to know what the paper is about,
-    its main findings, or its general content.
-    Input: markdown file path and what the user wants
-    """
-    result = summary_agent.invoke({
-        "messages": [{"role": "user", "content": request}]
-    })
-    return result["messages"][-1].content
+        graph = build_graph(checkpointer)
 
+        def cleanup():
+            try:
+                # Optional: Delete thread from DB on exit to keep it clean
+                # checkpointer.delete_thread(thread_id) 
+                print("\n  [Memory] Session ended.")
+            except Exception as e:
+                print(f"\n  [Warning] Could not clean session: {e}")
 
-supervisor = create_react_agent(
-    model,
-    tools=[convert_pdf, explain_formulas, summarize_paper],
-    prompt=(
-        "You are a research paper assistant. "
-        "When given a PDF path and a user request: "
-        "1. ALWAYS call convert_pdf first to get the markdown path. "
-        "2. Then call explain_formulas or summarize_paper based on the request. "
-        "Pass the markdown path in your tool calls. "
-        "Respond in the same language as the user."
-    )
-)
+        def handle_signal(sig, frame):
+            cleanup()
+            print("  Goodbye!\n")
+            sys.exit(0)
 
+        signal.signal(signal.SIGINT, handle_signal)
+
+        while True:
+            try:
+                user_input = input("You: ").strip()
+            except EOFError:
+                break
+
+            if not user_input:
+                continue
+            if user_input.lower() in ("exit", "quit", "q"):
+                break
+
+            message = f"PDF: {pdf_path}\n\nUser request: {user_input}"
+
+            print("\nAssistant: ", end="", flush=True)
+            try:
+                result = graph.invoke(
+                    {"messages": [HumanMessage(content=message)]},
+                    config,
+                )
+                # Get the last AI message from the result
+                for msg in reversed(result["messages"]):
+                    if msg.type == "ai" and msg.content:
+                        print(msg.content)
+                        break
+            except Exception as e:
+                print(f"[Error] {e}")
+
+            print()
+
+        cleanup()
+        print("  Goodbye!\n")
 
 if __name__ == "__main__":
-    import sys
-    import argparse
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument("pdf", help="Path to the PDF file")
-    parser.add_argument("--prompt", "-p", required=True)
+    parser = argparse.ArgumentParser(description="Research Paper Assistant CLI")
+    parser.add_argument("pdf", help="Path to the PDF file to analyze")
+    parser.add_argument("--db", default=DB_URI, help="PostgreSQL connection URI")
     args = parser.parse_args()
 
-    pdf_path = Path(args.pdf)
-    if not pdf_path.exists():
-        print(f"[ERROR] PDF not found: {pdf_path}")
+    pdf_file = Path(args.pdf)
+    if not pdf_file.exists():
+        print(f"[Error] PDF not found: {pdf_file}")
         sys.exit(1)
 
-    user_message = f"PDF: {pdf_path}\n\nUser request: {args.prompt}"
-    print(f"\nRequest: {args.prompt}\n" + "=" * 60)
-
-    for step in supervisor.stream(
-        {"messages": [{"role": "user", "content": user_message}]}
-    ):
-        for update in step.values():
-            for message in update.get("messages", []):
-                message.pretty_print()
+    run_chat(str(pdf_file), args.db)
