@@ -1,12 +1,13 @@
 from langchain.tools import tool
 from src.tools.pdf_tools import convert_pdf_to_md
-from src.config import model
 from src.tools.formula_tools import (
     build_formula_list,
     explain_all_formulas,
     explain_selected_formulas,
+    summarize_paper_mapreduce,
 )
 from typing import List
+
 
 @tool
 def convert_pdf(pdf_path: str) -> str:
@@ -34,39 +35,46 @@ def list_formulas(md_path: str) -> str:
 
 
 @tool
-def explain_formulas_by_ids(md_path: str, formula_ids: List[int]) -> str:
+def explain_formulas_by_ids(
+    md_path: str,
+    formula_ids: List[int],
+    mode: str = "deep",
+) -> str:
     """
     Explains specific formulas by their ID numbers.
     Use when user selects one or more formulas from the list.
-    formula_ids: list of integer IDs shown in list_formulas output.
+
+    Args:
+        md_path: Path to the markdown file.
+        formula_ids: List of integer IDs shown in list_formulas output.
+        mode: Explanation style.
+              'quick' → intuitive big-picture (key variable + one analogy, no math).
+              'deep'  → step-by-step derivation with symbol table (default).
     """
     formula_list = build_formula_list(md_path)
-    return explain_selected_formulas(formula_list, formula_ids)
+    result = explain_selected_formulas(formula_list, formula_ids, mode=mode)
+    # Prefix lets supervisor_node track which IDs were explained this turn.
+    return f"EXPLAINED_IDS:{formula_ids}\n\n{result}"
 
 
 @tool
-def explain_all_formulas_tool(md_path: str) -> str:
+def explain_all_formulas_tool(md_path: str, mode: str = "deep") -> str:
     """
     Explains ALL formulas in the paper at once.
     Use when user wants everything explained without selection.
+
+    Args:
+        md_path: Path to the markdown file.
+        mode: 'quick' or 'deep' (default: 'deep').
     """
-    return explain_all_formulas(md_path)
+    return explain_all_formulas(md_path, mode=mode)
 
 
 @tool
 def summarize_paper(md_path: str) -> str:
-    """Summarizes the paper. Max 300 words."""
-    with open(md_path, encoding="utf-8") as f:
-        content = f.read()[:5000]
-
-    response = model.invoke([
-        {
-            "role": "system",
-            "content": (
-                "Summarize in max 300 words: "
-                "main goal, methods, key findings, conclusions."
-            ),
-        },
-        {"role": "user", "content": content},
-    ])
-    return response.content
+    """
+    Summarizes the paper using map-reduce over all sections.
+    Each section is summarized in parallel, then merged into a
+    cohesive 250-300 word final summary.
+    """
+    return summarize_paper_mapreduce(md_path)
