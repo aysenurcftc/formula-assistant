@@ -14,7 +14,7 @@ HEADER_MATCH   = re.compile(r"^(#{1,6}) (.+)$", re.MULTILINE)
 
 
 FORMULA_PROMPTS = {
-    "quick": """You are an expert at explaining mathematical formulas intuitively.
+       "quick": """You are an expert at explaining mathematical formulas intuitively.
 
         For each formula:
         1. **Big Picture**: What does this formula achieve? (1 sentence)
@@ -26,7 +26,7 @@ FORMULA_PROMPTS = {
         - Pure intuition. Dense, vivid, fast.
         - Use the surrounding context to ground your explanation.""",
 
-            "deep": """You are an expert at explaining mathematical formulas in research papers.
+        "deep": """You are an expert at explaining mathematical formulas in research papers.
 
         For each formula:
         1. **Formula**: State it clearly.
@@ -44,12 +44,11 @@ Focus on: main claim, method used, key result (if any).
 Be dense. No filler words."""
 
 REDUCE_PROMPT = """You are given section-level summaries of a research paper.
-Write a cohesive 250-300 word summary covering:
-1. Research goal & motivation
-2. Proposed method / approach
-3. Key results & findings
-4. Conclusions & impact
-
+    Write a cohesive 250-300 word summary covering:
+    1. Research goal & motivation
+    2. Proposed method / approach
+    3. Key results & findings
+    4. Conclusions & impact
 Source: the section summaries below. Be precise and avoid repetition."""
 
 
@@ -79,7 +78,7 @@ def parse_formula_chunks(md_path: str) -> List[FormulaChunk]:
     return chunks
 
 
-def _extract_context(section_text: str, max_chars: int = 1_500) -> str:
+def _extract_context(section_text: str, max_chars: int = 1500) -> str:
     sentences = re.split(r'(?<=[.!?])\s+', section_text)
     relevant = []
 

@@ -5,7 +5,9 @@ from functools import lru_cache
 from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
 from langgraph.graph import StateGraph, START
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.checkpoint.postgres import PostgresSaver
+
 
 from src.config import model
 from src.tools.agent_tools import (
@@ -131,6 +133,13 @@ def make_checkpointer(db_uri: str) -> PostgresSaver:
     It does not use a context manager—this allows the connection to remain open 
     throughout the process via Streamlit's cache_resource.
     """
+    
     import psycopg
     conn = psycopg.connect(db_uri, autocommit=True)
     return PostgresSaver(conn)
+
+
+def graph_for_studio() -> StateGraph:
+    """An argumentless entry point for LangGraph Studio."""
+    checkpointer = MemorySaver()  
+    return build_graph(checkpointer)

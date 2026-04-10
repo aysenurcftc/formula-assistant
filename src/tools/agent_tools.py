@@ -48,8 +48,8 @@ def explain_formulas_by_ids(
         md_path: Path to the markdown file.
         formula_ids: List of integer IDs shown in list_formulas output.
         mode: Explanation style.
-              'quick' → intuitive big-picture (key variable + one analogy, no math).
-              'deep'  → step-by-step derivation with symbol table (default).
+            'quick' → intuitive big-picture (key variable + one analogy, no math).
+            'deep'  → step-by-step derivation with symbol table (default).
     """
     formula_list = build_formula_list(md_path)
     result = explain_selected_formulas(formula_list, formula_ids, mode=mode)
